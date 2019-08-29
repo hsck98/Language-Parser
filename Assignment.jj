@@ -1,0 +1,625 @@
+//README
+//This section is just a clarification of the parser. Given an input, the parser will
+//base its analysis solely on the syntax, not the context.
+//In the following example:   DEF P2P xXx { 3*Q()+R(6,Q(5))  };
+//
+//The parser will report that there is a missing space between the function name and
+//the parameter name. At first thought, given the context we know that P2P is
+//supposed to be the function name. However, the parser recognises a function name
+//as a continuous sequence of UPPERCASE characters. Therefore, in terms of syntax,
+//the function name is P and the parameter name is "technically" 2P. Hence there is
+//a missing space between function name and parameter name.
+
+PARSER_BEGIN(Assignment)
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.Stack;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.regex.*;
+import java.io.*;
+import java.lang.Character;
+import javax.script.ScriptEngineManager;
+import javax.script.ScriptEngine;
+import javax.script.ScriptException;
+
+public class Assignment
+{
+  String previousExpression;
+
+  public static void main(String [] args) throws ScriptException
+  {
+    HashMap < String, String > functions = new HashMap < String, String > ();
+    HashMap < String, String > parameters = new HashMap < String, String > ();
+    ArrayList < String > functionsCalled = new ArrayList < String > ();
+    ScriptEngineManager mgr = new ScriptEngineManager();
+    ScriptEngine engine = mgr.getEngineByName("JavaScript");
+    try
+    {
+      new Assignment(System.in).S(functions, functionsCalled, parameters);
+      if (checkFunctions(functions, functionsCalled, parameters) && checkMain(functions))
+      {
+        if (checkDirectRecursion(functions) || checkIndirectRecursion(functions))
+        {
+          System.out.println("Pass");
+          System.out.println("Divergence");
+        }
+        else
+        {
+          String answer = evaluateMain(functions, parameters, engine);
+          System.out.println("Pass");
+          System.out.println(answer);
+        }
+      }
+    }
+    catch (Throwable e)
+    {
+      String errorMessage = e.getMessage();
+      String [] parts = errorMessage.split(" ");
+      for (int i = 0; i < parts.length; i++)
+      {
+        if (parts [0].equals("Lexical"))
+        {
+          errorMessage = "The character " + parts [9] + " is invalid for PLM Programs";
+        }
+        else if (parts [0].equals("Encountered"))
+        {
+          errorMessage = "The function body must be composed of integers, parameters, calls to other functions and parenthesis";
+        }
+      }
+      System.err.println(errorMessage);
+    }
+  }
+
+  //EVALUATE MAIN
+  public static String evaluateMain(HashMap functions, HashMap parameters, ScriptEngine engine) throws ScriptException
+  {
+    String expression = functions.get("MAIN").toString();
+    String result = "";
+    String finalResult = "";
+    int engineResult = 0;
+    try
+    {
+      result = solution(functions, parameters, expression);
+      engineResult = (int) engine.eval(result);
+      finalResult = Integer.toString(engineResult);
+      return finalResult;
+    }
+    catch (ScriptException e)
+    {
+      return finalResult;
+    }
+  }
+
+  //RECURSIVE SUBSTITUTION OF FUNCTION CALLS WITH THEIR BODIES TO CREATE A SINGLE ARITHMETIC EXPRESSION
+  public static String solution(HashMap functions, HashMap parameters, String expression)
+  {
+    Pattern solvablePattern = Pattern.compile("[A-Z]+\\([0-9,(,+,*,)]+\\)");
+    Pattern keyPattern = Pattern.compile("[A-Z]+");
+    Pattern valuePattern = Pattern.compile("\\([0-9,+,(,)*]+\\)");
+    String solvableFunction = "";
+    String subKey = "";
+    String subValue = "";
+    String subExpression = "";
+    String subExpressionParameters = "";
+    String recursiveExpression = "";
+    Matcher solvableMatcher = solvablePattern.matcher(expression);
+    while (solvableMatcher.find())
+    {
+      solvableFunction = solvableMatcher.group(0);
+      Matcher subKeyMatcher = keyPattern.matcher(solvableMatcher.group(0));
+      while (subKeyMatcher.find())
+      {
+        subKey = subKeyMatcher.group(0);
+        Matcher subValueMatcher = valuePattern.matcher(solvableMatcher.group(0));
+        while (subValueMatcher.find())
+        {
+          subValue = subValueMatcher.group(0);
+          subExpression = "(" + functions.get(subKey).toString() + ")";
+          subExpressionParameters = parameters.get(subKey).toString();
+          String escapedLeftParenthesis = solvableFunction.replaceAll("\\(", "\\\\\\(");
+          String escapedRightParenthesis = escapedLeftParenthesis.replaceAll("\\)", "\\\\\\)");
+          String escapedPluses = escapedRightParenthesis.replaceAll("\\+", "\\\\\\+");
+          String escapedTimes = escapedPluses.replaceAll("\\*", "\\\\\\*");
+          expression = expression.replaceAll(escapedTimes, subExpression);
+          expression = expression.replaceAll(subExpressionParameters, subValue);
+          recursiveExpression = solution(functions, parameters, expression);
+          return recursiveExpression;
+        }
+      }
+    }
+    return expression;
+  }
+
+  //CHECK FOR DIRECT RECURSION
+  public static boolean checkDirectRecursion(HashMap functions)
+  {
+    Boolean result = false;
+    Iterator functionsIterator = functions.entrySet().iterator();
+    while (functionsIterator.hasNext())
+    {
+      Map.Entry pair = (Map.Entry) functionsIterator.next();
+      String funcKey = pair.getKey().toString();
+      String funcBody = pair.getValue().toString();
+      if (funcBody.contains(funcKey))
+      {
+        result = true;
+        return result;
+      }
+    }
+    return result;
+  }
+
+  //CHECK FOR INDIRECT RECURSION
+  public static boolean checkIndirectRecursion(HashMap functions)
+  {
+    Boolean result = false;
+    Iterator functionsIterator = functions.entrySet().iterator();
+    while (functionsIterator.hasNext())
+    {
+      Map.Entry pair = (Map.Entry) functionsIterator.next();
+      String funcKey = pair.getKey().toString();
+      String funcBody = pair.getValue().toString();
+      String [] substrings = funcKey.split("[^A-Z]+");
+      for (int i = 0; i < substrings.length; i++)
+      {
+        String subKey = substrings [i];
+        String subBody = functions.get(subKey).toString();
+        if (subBody.contains(funcKey))
+        {
+          result = true;
+          return result;
+        }
+      }
+    }
+    return result;
+  }
+
+  //CHECK FUNCTION CALLS ARE TO ALREADY EXISTING FUNCTIONS
+  public static boolean checkFunctions(HashMap functions, ArrayList functionsCalled, HashMap parameters)
+  {
+    Boolean exists = true;
+    Pattern functionCalls = Pattern.compile("[A-Z]+");
+    Iterator functionsIterator = functions.entrySet().iterator();
+    while (functionsIterator.hasNext())
+    {
+      Map.Entry pair = (Map.Entry) functionsIterator.next();
+      String funcKey = pair.getKey().toString();
+      String funcBody = pair.getValue().toString();
+      Matcher substrings = functionCalls.matcher(funcBody);
+      while (substrings.find())
+      {
+        String subKey = substrings.group(0);
+        if (!functions.containsKey(subKey))
+        {
+          exists = false;
+          System.err.println("Function '" + subKey + "' does not exist");
+          return exists;
+        }
+      }
+    }
+    return exists;
+  }
+
+  //CHECK PLM PROGRAM HAS A MAIN FUNCTION
+  public static boolean checkMain(HashMap functions)
+  {
+    Boolean exists = true;
+    if (!functions.containsKey("MAIN"))
+    {
+      System.err.println("Missing MAIN function");
+      exists = false;
+      return exists;
+    }
+    return exists;
+  }
+}
+
+PARSER_END(Assignment)
+
+//SKIP CHARACTERS
+SKIP :
+{
+  "\r"
+| "\t"
+}
+
+//RESERVED WORDS
+TOKEN :
+{
+  < DEF : "DEF" >
+| < MAIN : "MAIN" >
+}
+
+//IDENTIFIER TOKEN
+TOKEN :
+{
+  < OPENP : "(" >
+| < CLOSEP : ")" >
+| < OPENB : "{" >
+| < CLOSEB : "}" >
+| < ADD : "+" >
+| < MULTIPLY : "*" >
+| < SPACE : " " >
+| < SEMICOLON : ";" >
+| < NEWLINE : "\n" >
+| < INTEGERS : ([ "0"-"9" ])+ >
+| < PARNAME : ([ "a"-"z" ])+ >
+| < FUNCNAME : ([ "A"-"Z" ])+ >
+}
+
+//CHECK NEWLINE STARTS WITH DEF FOLLOWED BY A SPACE AND A FUNCTION NAME; OR EOF
+void checkDEF(HashMap functions, ArrayList functionsCalled, HashMap parameters) :
+{}
+{
+  try
+  {
+    < DEF >
+  }
+  catch (ParseException e)
+  {
+    throw new ParseException("After a new line, the line must begin with DEF or an EOF");
+  }
+  try
+  {
+    < SPACE >
+  }
+  catch (ParseException e)
+  {
+    throw new ParseException("There must be a space after a DEF");
+  }
+  (
+    (
+      checkMAINName(functions, functionsCalled, parameters)
+    )
+  |
+    (
+      checkFuncName(functions, functionsCalled, parameters)
+    )
+  )
+}
+
+//CHECK SEE IF FUNCTION NAME IS MAIN; FOLLOWED BY A SPACE AND AN OPEN CURLY BRACE
+void checkMAINName(HashMap functions, ArrayList functionsCalled, HashMap parameters) :
+{
+  String funcKey;
+  Token funcToken;
+}
+{
+  funcToken = < MAIN >
+  {
+    //IF MAIN FUNCTION ALREADY EXISTS, THROW ERROR MESSAGE AND EXIT PROCESS
+    funcKey = funcToken.toString();
+    if (functions.containsKey(funcKey))
+    {
+      System.err.println("MAIN function already exists");
+      System.exit(0);
+    }
+    functions.put(funcKey, "");
+    parameters.put(funcKey, "");
+    functionsCalled.add("MAIN");
+  }
+  try
+  {
+    < SPACE >
+  }
+  catch (ParseException e)
+  {
+    throw new ParseException("There must be a space between MAIN and an open curly brace");
+  }
+  checkLeftBrace(functions, functionsCalled, parameters, funcKey, "")
+}
+
+//CHECK FUNCTION NAME IS A STRING OF UPPERCASE LETTERS; FOLLOWED BY A SPACE AND A PARAMETER
+void checkFuncName(HashMap functions, ArrayList functionsCalled, HashMap parameters) :
+{
+  String funcKey;
+  Token funcToken;
+}
+{
+  try
+  {
+    funcToken = < FUNCNAME >
+    {
+      //IF FUNCTION ALREADY EXISTS, THROW ERROR MESSAGE AND EXIT PROCESS
+      funcKey = funcToken.toString();
+      if (functions.containsKey(funcKey))
+      {
+        System.err.println("Function '" + funcKey + "' already exists");
+        System.exit(0);
+      }
+      functions.put(funcKey, "");
+    }
+  }
+  catch (ParseException e)
+  {
+    throw new ParseException("The function name must be UPPERCASE or be MAIN");
+  }
+  try
+  {
+    < SPACE >
+  }
+  catch (ParseException e)
+  {
+    throw new ParseException("There must be a space between the function name and the parameter name");
+  }
+  checkParameter(functions, functionsCalled, parameters, funcKey)
+}
+
+//CHECK PARAMETER IS A STRING OF LOWERCASE LETTERS; IF THERE IS A SPACE, IT MUST BE FOLLOWED BY A LEFT BRACE
+void checkParameter(HashMap functions, ArrayList functionsCalled, HashMap parameters, String funcKey) :
+{
+  String parString;
+  Token parToken;
+}
+{
+  try
+  {
+    parToken = < PARNAME >
+    {
+      parString = parToken.toString();
+      parameters.put(funcKey, parString);
+    }
+  }
+  catch (ParseException e)
+  {
+    throw new ParseException("You must write a parameter name after a function name and a space");
+  }
+  try
+  {
+    < SPACE >
+  }
+  catch (ParseException e)
+  {
+    throw new ParseException("There must be a space between a parameter name and an open curly brace");
+  }
+  checkLeftBrace(functions, functionsCalled, parameters, funcKey, parString)
+}
+
+//CHECK FOR LEFT BRACE; FOLLOWED BY A SPACE AND A FUNCTION BODY
+void checkLeftBrace(HashMap functions, ArrayList functionsCalled, HashMap parameters, String funcKey, String parString) :
+{}
+{
+  try
+  {
+    < OPENB >
+  }
+  catch (ParseException e)
+  {
+    throw new ParseException("There must be an open curly brace after a parameter name/MAIN and a space");
+  }
+  try
+  {
+    < SPACE >
+  }
+  catch (ParseException e)
+  {
+    throw new ParseException("There must be a space between { and the function body");
+  }
+  checkFuncBody(functions, functionsCalled, parameters, funcKey, parString)
+}
+
+//CHECK FOR FUNCTION BODY BEING VALID
+void checkFuncBody(HashMap functions, ArrayList functionsCalled, HashMap parameters, String funcKey, String parString) :
+{}
+{
+  A(functions, functionsCalled, funcKey, parString)
+  try
+  {
+    < SPACE >
+  }
+  catch (ParseException e)
+  {
+    throw new ParseException("There must be a space between the function body and }");
+  }
+  checkRightBrace(functions, functionsCalled, parameters)
+}
+
+//FUNCTION BODY MUST START WITH EITHER AN INTEGER OR A FUNCTION CALL
+void C(HashMap functions, ArrayList functionsCalled, String funcKey, String parString) :
+{
+  String funcString;
+  Token funcToken;
+  String parameterString;
+  Token parToken;
+  String funcBody;
+  Token parenthesis;
+}
+{
+  funcToken = < INTEGERS >
+  updateHashMap(functions, funcToken, funcKey)
+|
+  funcToken = < FUNCNAME >
+  {
+    funcString = funcToken.toString();
+    if (!functionsCalled.contains(funcString))
+    {
+      functionsCalled.add(funcString);
+    }
+  }
+  updateHashMap(functions, funcToken, funcKey)
+  try
+  {
+    parenthesis = < OPENP >
+  }
+  catch (ParseException e)
+  {
+    throw new ParseException("There must be an open parenthesis after a function call");
+  }
+  updateHashMap(functions, parenthesis, funcKey)
+  A(functions, functionsCalled, funcKey, parString)
+  try
+  {
+    parenthesis = < CLOSEP >
+  }
+  catch (ParseException e)
+  {
+    throw new ParseException("There must be a closing parenthesis for any function call");
+  }
+  updateHashMap(functions, parenthesis, funcKey)
+|
+  parToken = < PARNAME >
+  {
+    parameterString = parToken.toString();
+    if (!parameterString.equals(parString))
+    {
+      System.err.println("Parameter '" + parameterString + "' does not match with '" + parString + "'");
+      System.exit(0);
+    }
+  }
+  updateHashMap(functions, parToken, funcKey)
+|
+  try
+  {
+    < OPENP >
+  }
+  catch (ParseException e)
+  {
+    throw new ParseException("Missing open parenthesis");
+  }
+  A(functions, functionsCalled, funcKey, parString)
+  try
+  {
+    < CLOSEP >
+  }
+  catch (ParseException e)
+  {
+    throw new ParseException("Missing closing parenthesis");
+  }
+}
+
+//ADDITION HAS LOWER PRECEDENCE THAN MULTIPLICATION
+void B(HashMap functions, ArrayList functionsCalled, String funcKey, String parString) :
+{
+  Token multiply;
+}
+{
+  C(functions, functionsCalled, funcKey, parString)
+  (
+    multiply = < MULTIPLY > updateHashMap(functions, multiply, funcKey) C(functions, functionsCalled, funcKey, parString)
+  )*
+}
+
+void A(HashMap functions, ArrayList functionsCalled, String funcKey, String parString) :
+{
+  Token add;
+}
+{
+  B(functions, functionsCalled, funcKey, parString)
+  (
+    add = < ADD > updateHashMap(functions, add, funcKey) B(functions, functionsCalled, funcKey, parString)
+  )*
+}
+
+//CHECK FOR RIGHT BRACE; FOLLOWED BY A SPACE AND A SEMICOLON
+void checkRightBrace(HashMap functions, ArrayList functionsCalled, HashMap parameters) :
+{}
+{
+  try
+  {
+    < CLOSEB >
+  }
+  catch (ParseException e)
+  {
+    throw new ParseException("There must a closing curly brace after the function body and a space");
+  }
+  try
+  {
+    < SPACE >
+  }
+  catch (ParseException e)
+  {
+    throw new ParseException("There must be a space between } and ;");
+  }
+  checkSemicolon(functions, functionsCalled, parameters)
+}
+
+//CHECK FOR SEMICOLON; FOLLOWED BY A /n
+void checkSemicolon(HashMap functions, ArrayList functionsCalled, HashMap parameters) :
+{}
+{
+  try
+  {
+    < SEMICOLON >
+  }
+  catch (ParseException e)
+  {
+    throw new ParseException("There must be a ; after a closing curly brace and a space");
+  }
+  checkNewline(functions, functionsCalled, parameters)
+}
+
+//CHECK FOR /n AND CALL checkDEF() TO CHECK IF IT'S THE END OR NOT
+void checkNewline(HashMap functions, ArrayList functionsCalled, HashMap parameters) :
+{}
+{
+  try
+  {
+    < NEWLINE >
+  }
+  catch (ParseException e)
+  {
+    throw new ParseException("You must start a new line immediately after a ;");
+  }
+  (
+    (
+    < EOF >
+    )
+  |
+    (
+      checkDEF(functions, functionsCalled, parameters)
+    )
+  |
+    (
+      {
+        throw new ParseException("After a new line, the line must begin with DEF or an EOF");
+      }
+    )
+  )
+}
+
+//START
+void S(HashMap functions, ArrayList functionsCalled, HashMap parameters) :
+{}
+{
+  try
+  {
+    < DEF >
+  }
+  catch (ParseException e)
+  {
+    throw new ParseException("PLM Program must begin with DEF");
+  }
+  try
+  {
+    < SPACE >
+  }
+  catch (ParseException e)
+  {
+    throw new ParseException("There must be a space after a DEF");
+  }
+  (
+    (
+      checkMAINName(functions, functionsCalled, parameters)
+    )
+  |
+    (
+      checkFuncName(functions, functionsCalled, parameters)
+    )
+  )
+}
+
+//UPDATE THE HASHMAP WITH THE CORRECT FUNCTION BODY FOR EACH FUNCTION
+void updateHashMap(HashMap functions, Token t, String funcKey) :
+{
+  String funcBody;
+  String funcString;
+}
+{
+  {
+    funcString = t.toString();
+    funcBody = functions.get(funcKey).toString();
+    funcBody += funcString;
+    functions.replace(funcKey, funcBody);
+  }
+}
