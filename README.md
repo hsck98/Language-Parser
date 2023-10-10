@@ -1,9 +1,7 @@
 # Language-Parser
 Formal Languages Coursework
 
-//README
-//This section is just a clarification of the parser. Given an input, the parser will
-//base its analysis solely on the syntax, not the context.
+//Given an input, the parser will base its analysis solely on the syntax, not the context.
 //In the following example:   DEF P2P xXx { 3*Q()+R(6,Q(5))  };
 //
 //The parser will report that there is a missing space between the function name and
